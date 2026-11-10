@@ -1,7 +1,7 @@
 /**
  * dsh-cli-anything-aseprite — formal DSH Host plugin.
  *
- * Registers the pixel-art studio tool set (18 tools) that drive the
+ * Registers the pixel-art studio tool set (19 tools) that drive the
  * `cli-anything-aseprite` Python harness (CLI-Anything methodology):
  * every stroke is a real CLI command against a persistent project file,
  * so AI draws pixel art like a human — one deliberate operation at a time.
@@ -9,23 +9,41 @@
  * Requirements:
  *   pip install -e ./python     (the harness; `cli-anything-aseprite` CLI)
  *
- * The optional live terminal monitor UI (GUI overlay showing the canvas
- * frame, layers, export buttons…) ships as `src/monitor.client.js` and is
- * loaded via DSH dynamic plugins in a session — see README.
+ * Works on DSH 0.1.x and 0.2.x: the shell executor seam is `run(spec)` in
+ * 0.1 and `execute(spec) → handle.result()` from 0.2 on, so both are probed
+ * at call time. Commands are built for `bash -c` on POSIX and for
+ * `pwsh -Command` on Windows.
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 export const name = 'cli-anything-aseprite'
 export const inject = ['tools', 'timer']
 
+/** Quote one argv word for a POSIX shell. */
 function q(arg) {
   return "'" + String(arg).replace(/'/g, "'\\''") + "'"
 }
 
+/** Quote one argv word for PowerShell (single-quoted, doubled inner quotes). */
+function qPwsh(arg) {
+  return "'" + String(arg).replace(/'/g, "''") + "'"
+}
+
+/** Expand a leading `~` the way a shell would, on every platform. */
+function expandHome(p) {
+  if (typeof p !== 'string') return p
+  if (p === '~') return homedir()
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2))
+  return p
+}
+
 export function apply(ctx, config = {}) {
-  const CLI = 'cli-anything-aseprite'
+  const CLI = process.env.ASEPRITE_CLI || config.cli || 'cli-anything-aseprite'
   const DEFAULT_DIR = process.env.ASEPRITE_WORKDIR || config.workdir || '~/.dsh/aseprite-work'
-  const workdir = DEFAULT_DIR.replace(/^~/, process.env.HOME || '')
+  const workdir = expandHome(DEFAULT_DIR)
 
   const state = {
     version: 0, file: null, workdir, name: '', width: 0, height: 0,
@@ -33,20 +51,53 @@ export function apply(ctx, config = {}) {
     palette: 0, dirty: false, lastOp: '', log: [],
   }
 
+  // The harness workdir must exist before the shell executor tries to spawn in
+  // it: a missing cwd fails the spawn itself, before the CLI ever runs.
+  function ensureWorkdir() {
+    try { mkdirSync(state.workdir, { recursive: true }) } catch (e) { /* surfaced by the CLI run below */ }
+  }
+
+  // DSH 0.2 replaced ShellExecutor.run(spec) with execute(spec) → handle.result().
+  // The returned result object kept its shape (exitCode / stdout.text /
+  // stderr.text), so only the call itself differs between the two generations.
+  async function runShell(shell, spec) {
+    if (typeof shell.execute === 'function') {
+      const handle = await shell.execute(spec)
+      return typeof handle?.result === 'function' ? await handle.result() : handle
+    }
+    if (typeof shell.run === 'function') return await shell.run(spec)
+    throw new Error('DSH shell executor exposes neither run() nor execute()')
+  }
+
+  /**
+   * Build the one-line command for this host's shell executor.
+   * POSIX hosts run bash -c; Windows hosts run pwsh -Command. PowerShell needs
+   * the call operator (&) in front of a quoted program path, otherwise the
+   * line is parsed as a bare string expression and nothing executes.
+   */
+  function buildCommand(args) {
+    const words = [CLI].concat(args)
+    const win32 = process.platform === 'win32'
+    const quoted = words.map(win32 ? qPwsh : q).join(' ')
+    return win32 ? '& ' + quoted : quoted
+  }
+
   async function runCli(args) {
     const shell = ctx.get('shell')
     if (shell === undefined) throw new Error('shell service unavailable — dsh shell plugin missing')
-    const policy = ctx.get('sandboxPolicy') !== undefined
-      ? ctx.get('sandboxPolicy').resolve({ mode: 'danger-full-access' })
+    ensureWorkdir()
+    const policyService = ctx.get('sandboxPolicy')
+    const policy = policyService !== undefined
+      ? policyService.resolve({ mode: 'danger-full-access' })
       : undefined
     const spec = shell.resolve({
-      command: [CLI].concat(args).map(q).join(' '),
+      command: buildCommand(args),
       workdir: state.workdir,
       timeoutMs: 60000,
       stdoutMaxBytes: 4000000,
       sandboxPolicy: policy,
     })
-    const r = await shell.run(spec)
+    const r = await runShell(shell, spec)
     if (r.exitCode !== 0) {
       const err = String((r.stderr && r.stderr.text) || r.stdout.text || '?').slice(0, 500)
       if (/No such file or directory|command not found|not found/.test(err)) {
@@ -56,7 +107,13 @@ export function apply(ctx, config = {}) {
       }
       throw new Error('harness failed: ' + err)
     }
-    return JSON.parse(r.stdout.text)
+    const out = String((r.stdout && r.stdout.text) || '').trim()
+    if (out === '') throw new Error('harness returned no output (command: ' + buildCommand(args) + ')')
+    try {
+      return JSON.parse(out)
+    } catch (e) {
+      throw new Error('harness returned non-JSON output: ' + out.slice(0, 400))
+    }
   }
 
   async function refresh(lastOp) {
@@ -111,7 +168,8 @@ export function apply(ctx, config = {}) {
     ['pixelart_new', '新建像素画项目，独立文件 <name>.pxa。尺寸自由 1..1024 或 preset(icon/sprite/avatar/portrait/scene/wide/max)，palette pico8/db16/sweetie16/na16。',
       { name: { type: 'string', required: true }, width: { type: 'integer' }, height: { type: 'integer' }, preset: { type: 'string', enum: ['icon', 'sprite', 'avatar', 'portrait', 'scene', 'wide', 'max'] }, palette: { type: 'string' } },
       async (a) => {
-        const f = state.workdir + '/' + String(a.name || 'untitled').replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_') + '.pxa'
+        const f = join(state.workdir, String(a.name || 'untitled').replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]/g, '_') + '.pxa')
+        ensureWorkdir()
         const c = ['--file', f, '--json', 'project', 'new', a.name || 'untitled']
         if (a.preset) c.push('--preset', a.preset)
         else { if (a.width) c.push('--width', String(a.width)); if (a.height) c.push('--height', String(a.height)) }
@@ -124,7 +182,7 @@ export function apply(ctx, config = {}) {
       }],
     ['pixelart_open', '打开已有 .pxa 项目。', { path: { type: 'string' } },
       async (a) => {
-        const p = a && a.path ? String(a.path) : state.workdir + '/art.pxa'
+        const p = a && a.path ? String(a.path) : join(state.workdir, 'art.pxa')
         const r = await runCli(['--file', p, '--json', 'project', 'info'])
         state.file = p
         await refresh('open')
@@ -132,7 +190,7 @@ export function apply(ctx, config = {}) {
       }],
     ['pixelart_workdir', '查看/更改工作区目录（作品存放处）。', { op: { type: 'string', required: true, enum: ['get', 'set'] }, dir: { type: 'string' } },
       async (a) => {
-        if (a.op === 'set') { if (!a.dir) throw new Error('dir required'); state.workdir = String(a.dir).replace(/^~/, process.env.HOME || ''); state.file = null }
+        if (a.op === 'set') { if (!a.dir) throw new Error('dir required'); state.workdir = expandHome(String(a.dir)); ensureWorkdir(); state.file = null }
         return { workdir: state.workdir, open: state.file, version: state.version }
       }],
     ['pixelart_draw', '绘制原语 pixel/line/rect/ellipse/flood/erase。颜色支持 rgb16:r,g,b（4096 色）。受对称/平铺模式影响。',
@@ -244,8 +302,8 @@ export function apply(ctx, config = {}) {
       { format: { type: 'string', required: true, enum: ['png', 'gif', 'aseprite', 'spritesheet', 'pngs'] }, path: { type: 'string' }, scale: { type: 'integer' }, filename: { type: 'string' } },
       async (a) => {
         let p
-        if (a.format === 'pngs') p = a.path || (state.workdir + '/frames')
-        else { const ext = a.format === 'spritesheet' ? 'png' : a.format; p = a.path || (state.workdir + '/art.' + ext) }
+        if (a.format === 'pngs') p = a.path || join(state.workdir, 'frames')
+        else { const ext = a.format === 'spritesheet' ? 'png' : a.format; p = a.path || join(state.workdir, 'art.' + ext) }
         const c = ['--file', state.file, '--json', 'export', a.format === 'pngs' ? 'pngs' : a.format, p]
         if (a.format === 'pngs' && a.filename) c.push('--filename', a.filename)
         if (a.scale) c.push('--scale', String(a.scale))
@@ -271,9 +329,13 @@ export function apply(ctx, config = {}) {
   // auto-resume the default project on start
   ctx.timeout(async () => {
     try {
+      const f = join(state.workdir, 'art.pxa')
       const fs = ctx.get('fs')
-      const f = state.workdir + '/art.pxa'
-      if (fs !== undefined && (await fs.stat(await fs.resolve(f))) !== undefined) {
+      if (fs === undefined || typeof fs.lstat !== 'function') return
+      // lstat() takes a plain path, so resuming needs no extra service and no
+      // directory that must already exist.
+      const info = await fs.lstat(f)
+      if (info !== undefined) {
         state.file = f
         await refresh('resumed')
       }

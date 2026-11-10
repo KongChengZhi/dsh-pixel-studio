@@ -26,13 +26,21 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.1.0-rc.5"
     }
   },
   "engines": {
     "node": ">=20"
   },
   "license": "MIT",
-  "dependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.5"
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
   }
 }

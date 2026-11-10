@@ -4,7 +4,7 @@
 
 An agent-usable CLI harness for the [Aseprite](https://www.aseprite.com) pixel-art
 editor, built with the [CLI-Anything](https://github.com/HKUDS/CLI-Anything)
-methodology, plus a DSH plugin that turns it into 18 model tools. The AI draws
+methodology, plus a DSH plugin that turns it into 19 model tools. The AI draws
 pixel art **like a human** — one deliberate stroke at a time — and every stroke
 is rendered live as an ANSI terminal frame, so humans can watch the AI work in
 real time.
@@ -35,9 +35,11 @@ DSH 像素画工作室：AI 像人类一样分步绘制像素画（打形→底�
 - **Undo/redo** across CLI processes (sidecar persistence), crash-safe
   concurrent saves.
 - **75/75 tests** (unit + E2E, including byte-level .aseprite format checks).
-- Optional **live monitor UI** (draggable overlay: ANSI canvas, preview zoom,
-  layers with opacity sliders, export buttons, project switcher, workdir
-  picker) — loaded as a DSH dynamic plugin, see `monitor/`.
+- **Live monitor UI** (optional): a draggable overlay with the ANSI canvas,
+  preview zoom, layer opacity sliders and export buttons.
+- **DSH 0.1.x and 0.2.x**: the plugin detects whether the host's shell
+  executor exposes `run()` (0.1) or `execute()` (0.2) and adapts; commands are
+  built for `bash -c` on POSIX and `pwsh -Command` on Windows.
 
 ## 📦 Install
 
@@ -78,9 +80,11 @@ Then verify the layer applied:
 dsh --dump-config | grep cli-anything-aseprite
 ```
 
-The plugin registers 18 `pixelart_*` tools in every session of that profile.
-Workdir defaults to `~/.dsh/aseprite-work` (override with the plugin `config:
-workdir:` row or `ASEPRITE_WORKDIR` env).
+The plugin registers 19 `pixelart_*` tools in every session of that profile.
+Workdir defaults to `~/.dsh/aseprite-work` — expanded to the real home directory
+on every platform, and created on first use — and can be overridden with the
+plugin `config: workdir:` row or the `ASEPRITE_WORKDIR` env var. Set
+`ASEPRITE_CLI` (or `config: cli:`) when the harness executable is not on `PATH`.
 
 ## 🚀 Quick start (AI draws a sprite)
 
@@ -102,7 +106,7 @@ workdir:` row or `ASEPRITE_WORKDIR` env).
 
 ```
 dsh-cli-anything-aseprite/
-├── src/index.js            # DSH Host plugin: 18 pixelart_* tools (defineTool)
+├── src/index.js            # DSH Host plugin: 19 pixelart_* tools (defineTool)
 ├── cordis.patch.yml        # DSH bundle patch layer
 ├── package.json            # dsh.bundle manifest
 ├── python/                 # cli-anything-aseprite Python harness
@@ -111,9 +115,9 @@ dsh-cli-anything-aseprite/
 │       │                   # palette, layers, animation, export (.aseprite
 │       │                   # binary writer), session (undo)
 │       ├── utils/          # terminal (ANSI frames + onion skin), io, backend
-│       ├── tests/          # TEST.md plan + 73 tests
+│       ├── tests/          # TEST.md plan + 75 tests
 │       └── skills/SKILL.md # AI pixel-art methodology (human drawing passes)
-└── monitor/                # optional live GUI monitor (dynamic DSH plugin)
+└── cordis.patch.yml        # DSH bundle patch layer
 ```
 
 ## 🧪 Test
