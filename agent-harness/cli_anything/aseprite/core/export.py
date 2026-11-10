@@ -120,10 +120,14 @@ def _pack_string(s: str) -> bytes:
     return struct.pack("<H", len(b)) + b
 
 
+def _pack_chunk(chunk_type: int, body: bytes) -> bytes:
+    """Pack an ASE chunk; its size includes the 6-byte chunk header."""
+    return struct.pack("<IH", len(body) + 6, chunk_type) + body
+
+
 def _pack_palette_chunk(doc) -> bytes:
     pal = doc["palette"]
-    body = struct.pack("<I", 8)               # palette size (v1 header)
-    body += struct.pack("<II", 0, max(0, len(pal) - 1))  # first, last index
+    body = struct.pack("<III", len(pal), 0, max(0, len(pal) - 1))
     body += b"\x00" * 8
     for c in pal:
         flags = 1 if c.get("name") else 0
@@ -134,25 +138,24 @@ def _pack_palette_chunk(doc) -> bytes:
     return body
 
 
-def _pack_layer_chunk(doc) -> bytes:
-    body = b""
-    for i, layer in enumerate(doc["layers"]):
-        flags = 0
-        if layer.get("visible", True):
-            flags |= 1
-        if i == 0:
-            flags |= 8  # background
-        body += struct.pack("<HHHHBB", flags, 0, 0, 0, layer.get("opacity", 255), 0)
-        body += b"\x00" * 3
-        body += _pack_string(layer["name"])
-    return body
+def _pack_layer_chunk(layer: dict) -> bytes:
+    flags = 2  # editable
+    if layer.get("visible", True):
+        flags |= 1
+    if layer.get("reference", False):
+        flags |= 64
+    opacity = max(0, min(255, int(layer.get("opacity", 255))))
+    body = struct.pack("<HHHHHHB3x", flags, 0, 0, 0, 0, 0, opacity)
+    return body + _pack_string(layer["name"])
 
 
-def _pack_cel_chunk(doc, frame_id: int, layer: dict) -> bytes:
+def _pack_cel_chunk(doc, frame_id: int, layer: dict) -> Optional[bytes]:
     frame = get_frame(doc, frame_id)
     cel = frame["cels"].get(str(layer["id"]), {})
+    if not cel:
+        return None
     w, h = doc["width"], doc["height"]
-    # raw image data: rows of B,G,R,A
+    # ASE RGBA pixels are stored row-by-row in red, green, blue, alpha order.
     raw = bytearray()
     for y in range(h):
         for x in range(w):
@@ -161,35 +164,26 @@ def _pack_cel_chunk(doc, frame_id: int, layer: dict) -> bytes:
                 r, g, b, a = hex_to_rgba(color)
             else:
                 r = g = b = a = 0
-            raw += struct.pack("<BBBB", b, g, r, a)
+            raw += struct.pack("<BBBB", r, g, b, a)
     compressed = zlib.compress(bytes(raw), 9)
-    if len(compressed) < len(raw):
-        body = struct.pack("<HHHBH", doc["layers"].index(layer), 0, 0, 0, 2)
-        body += b"\x00" * 7
-        body += struct.pack("<HH", w, h)
-        body += struct.pack("<I", len(compressed))
-        body += compressed
-    else:
-        body = struct.pack("<HHHBH", doc["layers"].index(layer), 0, 0, 0, 0)
-        body += b"\x00" * 7
-        body += struct.pack("<HH", w, h)
-        body += bytes(raw)
-    return body
+    layer_index = doc["layers"].index(layer)
+    body = struct.pack("<HhhBHh5xHH", layer_index, 0, 0, 255, 2, 0, w, h)
+    return body + compressed
 
 
 def _pack_frame_tags_chunk(doc) -> bytes:
-    if len(doc["frames"]) < 2:
+    tags = doc.get("frame_tags", [])
+    if not tags:
         return None
-    body = struct.pack("<H", 1)
+    body = struct.pack("<H", len(tags))
     body += b"\x00" * 8
-    body += struct.pack("<HH", 0, len(doc["frames"]) - 1)
-    body += struct.pack("<B", 0)              # loop direction forward
-    body += b"\x00" * 8
-    body += b"\x00" * 6
-    body += b"\x00" * 7
-    body += struct.pack("<BBB", 0x42, 0x9c, 0xe8)
-    body += b"\x00"
-    body += _pack_string("all")
+    for tag in tags:
+        r, g, b, _ = hex_to_rgba(tag.get("color", "#42bce8"))
+        body += struct.pack(
+            "<HHBH6xBBBB",
+            int(tag["from"]), int(tag["to"]), 0, 0, r, g, b, 0,
+        )
+        body += _pack_string(tag["name"])
     return body
 
 
@@ -197,38 +191,45 @@ def export_aseprite(doc, path: str) -> dict:
     """Write the document as a native .aseprite file (ASE spec)."""
     w, h = doc["width"], doc["height"]
     frames = doc["frames"]
-    color_depth = 32  # RGBA
-    header = struct.pack("<I", 0xA5E0)
-    header += struct.pack("<I", len(frames))
-    header += struct.pack("<HH", w, h)
-    header += struct.pack("<H", color_depth)
-    header += struct.pack("<I", 1)  # flags: layered
-    header += struct.pack("<H", 100)  # speed (deprecated)
-    header += struct.pack("<I", 0)
-    header += struct.pack("<I", 0)
-    header += struct.pack("<BB", 0, 0)
-    header += struct.pack("<I", 0x461)  # sRGB color profile
-    header += b"\x00" * 4               # color profile data length + reserved
-    header += b"\x00" * 16
-    header += b"\x00" * 2
-    header += b"\x00" * 72
+    if not frames or len(frames) > 0xFFFF:
+        raise ValueError(".aseprite export requires 1..65535 frames")
 
-    layer_chunk = _pack_layer_chunk(doc)
-    palette_chunk = _pack_palette_chunk(doc)
-    tags_chunk = _pack_frame_tags_chunk(doc)
-
+    palette_chunk = _pack_chunk(0x2019, _pack_palette_chunk(doc))
+    tags_body = _pack_frame_tags_chunk(doc)
     frames_bytes = b""
-    for frame in frames:
-        chunks = b""
-        chunks += struct.pack("<I", len(layer_chunk)) + struct.pack("<H", 0x2004) + layer_chunk
-        chunks += struct.pack("<I", len(palette_chunk)) + struct.pack("<H", 0x2019) + palette_chunk
-        if tags_chunk:
-            chunks += struct.pack("<I", len(tags_chunk)) + struct.pack("<H", 0x2018) + tags_chunk
+    for frame_index, frame in enumerate(frames):
+        chunks = []
+        if frame_index == 0:
+            chunks.extend(
+                _pack_chunk(0x2004, _pack_layer_chunk(layer))
+                for layer in doc["layers"]
+            )
+            chunks.append(palette_chunk)
+            if tags_body:
+                chunks.append(_pack_chunk(0x2018, tags_body))
         for layer in doc["layers"]:
-            cel_chunk = _pack_cel_chunk(doc, frame["id"], layer)
-            chunks += struct.pack("<I", len(cel_chunk)) + struct.pack("<H", 0x2005) + cel_chunk
-        frame_bytes = struct.pack("<H", frame["duration"]) + b"\x00" * 6
-        frames_bytes += struct.pack("<I", len(frame_bytes) + len(chunks)) + frame_bytes + chunks
+            cel_body = _pack_cel_chunk(doc, frame["id"], layer)
+            if cel_body is not None:
+                chunks.append(_pack_chunk(0x2005, cel_body))
+        chunk_data = b"".join(chunks)
+        chunk_count = len(chunks)
+        duration = max(1, min(0xFFFF, int(frame.get("duration", 100))))
+        frame_size = 16 + len(chunk_data)
+        frame_header = struct.pack(
+            "<IHHH2xI", frame_size, 0xF1FA,
+            min(chunk_count, 0xFFFF), duration, chunk_count,
+        )
+        frames_bytes += frame_header + chunk_data
+
+    file_size = 128 + len(frames_bytes)
+    speed = max(1, min(0xFFFF, int(frames[0].get("duration", 100))))
+    color_count = min(len(doc.get("palette", [])), 0xFFFF)
+    header = struct.pack(
+        "<IHHHHHIHII",
+        file_size, 0xA5E0, len(frames), w, h, 32, 1, speed, 0, 0,
+    )
+    header += struct.pack("<B3xHBBhhHH84x", 0, color_count, 1, 1, 0, 0, 0, 0)
+    assert len(header) == 128
 
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "wb") as f:

@@ -102,16 +102,21 @@ def test_e2e_aseprite_binary_structure():
     r = run("export", "aseprite", out, file=f)
     assert r["format"] == "aseprite"
     d = open(out, "rb").read()
-    magic, frames, w, h, depth, flags = struct.unpack("<IIHHHH", d[:16])
+    file_size, magic, frames, w, h, depth = struct.unpack("<IHHHHH", d[:14])
+    assert file_size == len(d)
     assert magic == 0xA5E0 and frames == 1 and w == 8 and h == 8 and depth == 32
-    fsize = struct.unpack("<I", d[128:132])[0]
-    assert fsize == len(d) - 132
-    pos, end = 140, 132 + fsize
+    frame_size, frame_magic, old_chunks, duration, chunks = struct.unpack(
+        "<IHHH2xI", d[128:144]
+    )
+    assert frame_size == len(d) - 128
+    assert frame_magic == 0xF1FA and old_chunks == chunks and duration == 100
+    pos, end = 144, 128 + frame_size
     seen = set()
     while pos < end:
         csize, ctype = struct.unpack("<IH", d[pos:pos + 6])
+        assert csize >= 6
         seen.add(ctype)
-        pos += 6 + csize
+        pos += csize
     assert pos == end
     assert 0x2004 in seen and 0x2019 in seen and 0x2005 in seen
 
@@ -124,21 +129,72 @@ def test_e2e_aseprite_cel_data():
     out = os.path.join(TMP, "w6.aseprite")
     run("export", "aseprite", out, file=f)
     d = open(out, "rb").read()
-    pos, end = 140, 132 + struct.unpack("<I", d[128:132])[0]
+    frame_size = struct.unpack("<I", d[128:132])[0]
+    pos, end = 144, 128 + frame_size
     found = False
     while pos < end:
         csize, ctype = struct.unpack("<IH", d[pos:pos + 6])
         if ctype == 0x2005:
-            body = d[pos + 6:pos + 6 + csize]
-            _, _, _, _, typ = struct.unpack("<HHHBH", body[:9])
-            w, h = struct.unpack("<HH", body[16:20])
-            raw = zlib.decompress(body[24:24 + struct.unpack("<I", body[20:24])[0]])
+            body = d[pos + 6:pos + csize]
+            layer, x, y, opacity, typ, z_index, w, h = struct.unpack(
+                "<HhhBHh5xHH", body[:20]
+            )
+            assert (layer, x, y, opacity, typ, z_index) == (0, 0, 0, 255, 2, 0)
+            raw = zlib.decompress(body[20:])
             assert len(raw) == w * h * 4
-            assert raw[0:4] == bytes([0, 0, 255, 255])           # (0,0) red
-            assert raw[15 * 4:15 * 4 + 4] == bytes([255, 0, 0, 255])  # (3,3) blue
+            assert raw[0:4] == bytes([255, 0, 0, 255])           # (0,0) red
+            assert raw[15 * 4:15 * 4 + 4] == bytes([0, 0, 255, 255])  # (3,3) blue
             found = True
-        pos += 6 + csize
+        pos += csize
     assert found
+
+
+def test_e2e_aseprite_animation_and_tags():
+    """Animation metadata must survive native ASE export."""
+    f = os.path.join(TMP, "w11.pxa")
+    run("project", "new", "w11", "--width", "4", "--height", "4", file=f)
+    run("pixel", "set", "0", "0", "#ff0000", file=f)
+    run("layer", "add", "fx", file=f)
+    run("pixel", "set", "1", "1", "#00ff00", file=f)
+    run("frame", "add", "--duration", "120", file=f)
+    run("pixel", "set", "2", "2", "#0000ff", file=f)
+    run("frame", "tag", "add", "cycle", "0", "1", "--color", "#ffec27", file=f)
+    out = os.path.join(TMP, "w11.aseprite")
+    run("export", "aseprite", out, file=f)
+
+    d = open(out, "rb").read()
+    file_size, magic, frames = struct.unpack("<IHH", d[:8])
+    assert file_size == len(d) and magic == 0xA5E0 and frames == 2
+    durations = []
+    frame_chunks = []
+    pos = 128
+    for frame_index in range(frames):
+        frame_start = pos
+        frame_size, frame_magic, old_chunks, duration, chunks = struct.unpack(
+            "<IHHH2xI", d[pos:pos + 16]
+        )
+        assert frame_magic == 0xF1FA and old_chunks == chunks
+        durations.append(duration)
+        frame_end = frame_start + frame_size
+        pos += 16
+        types = []
+        for _ in range(chunks):
+            csize, ctype = struct.unpack("<IH", d[pos:pos + 6])
+            assert csize >= 6
+            types.append(ctype)
+            if frame_index == 0 and ctype == 0x2018:
+                body = d[pos + 6:pos + csize]
+                assert struct.unpack("<H", body[:2])[0] == 1
+                name_len = struct.unpack("<H", body[27:29])[0]
+                assert body[29:29 + name_len] == b"cycle"
+            pos += csize
+        assert pos == frame_end
+        frame_chunks.append(types)
+    assert pos == len(d)
+    assert durations == [100, 120]
+    assert 0x2004 in frame_chunks[0] and 0x2019 in frame_chunks[0]
+    assert 0x2018 in frame_chunks[0]
+    assert all(types.count(0x2005) == 2 for types in frame_chunks)
 
 
 def test_e2e_undo_redo():

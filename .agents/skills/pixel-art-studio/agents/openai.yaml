@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pixel Art Studio"
+  short_description: "Create and export pixel art with a stateful CLI"
+  default_prompt: "Use $pixel-art-studio to create a polished 32x32 game sprite and export PNG and Aseprite files."
+
+policy:
+  allow_implicit_invocation: true

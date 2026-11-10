@@ -34,7 +34,7 @@ DSH 像素画工作室：AI 像人类一样分步绘制像素画（打形→底�
   opens in the real Aseprite).
 - **Undo/redo** across CLI processes (sidecar persistence), crash-safe
   concurrent saves.
-- **73/73 tests** (unit + E2E, including byte-level .aseprite format checks).
+- **75/75 tests** (unit + E2E, including byte-level .aseprite format checks).
 - Optional **live monitor UI** (draggable overlay: ANSI canvas, preview zoom,
   layers with opacity sliders, export buttons, project switcher, workdir
   picker) — loaded as a DSH dynamic plugin, see `monitor/`.
@@ -119,7 +119,7 @@ dsh-cli-anything-aseprite/
 ## 🧪 Test
 
 ```bash
-python3 -m pytest python/cli_anything/aseprite/tests/ -q   # 73 passing
+python3 -m pytest python/cli_anything/aseprite/tests/ -q   # 75 passing
 ```
 
 ## 🏗️ How it works (architecture)

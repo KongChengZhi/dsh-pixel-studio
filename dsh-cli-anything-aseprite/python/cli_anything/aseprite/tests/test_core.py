@@ -12,6 +12,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cli_anything.aseprite.core import model, canvas, palette, layers, animation, session
 from cli_anything.aseprite.core.session import Session
+from cli_anything.aseprite.utils.io import load_json, locked_save_json
+
+
+def test_locked_save_json_create_and_overwrite(tmp_path):
+    path = tmp_path / "project.pxa"
+
+    locked_save_json(str(path), {"version": 1})
+    assert load_json(str(path)) == {"version": 1}
+
+    locked_save_json(str(path), {"version": 2})
+    assert load_json(str(path)) == {"version": 2}
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 # ---------------------------------------------------------------------------

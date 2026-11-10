@@ -5,7 +5,7 @@
 | File | Planned | Purpose |
 |------|---------|---------|
 | `test_core.py` | 32 unit tests | Core modules in isolation (model, canvas, palette, layers, frames, session, export internals) |
-| `test_full_e2e.py` | 10 E2E tests | Real CLI invocations producing real files (.pxa, PNG, GIF, .aseprite) |
+| `test_full_e2e.py` | 11 E2E tests | Real CLI invocations producing real files (.pxa, PNG, GIF, .aseprite) |
 
 ## 2. Unit Test Plan
 
@@ -59,10 +59,11 @@ Real CLI invocations via subprocess (`cli-anything-aseprite --json`), producing 
 4. GIF animation export: 2 frames → file exists, first bytes "GIF"
 5. .aseprite export → parse header: magic 0xA5E0, frames, size, depth 32
 6. .aseprite cel chunk zlib-decompress matches model pixels
-7. undo/redo via CLI JSON output
-8. flood fill via CLI changes region
-9. terminal render returns ANSI/plain frame containing '##'
-10. multi-layer merge via CLI
+7. .aseprite animation frames, layers, durations, and frame tags
+8. undo/redo via CLI JSON output
+9. flood fill via CLI changes region
+10. terminal render returns ANSI/plain frame containing '##'
+11. multi-layer merge via CLI
 
 ## 4. Realistic Workflow Scenarios
 

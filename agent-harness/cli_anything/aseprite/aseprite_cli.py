@@ -37,6 +37,16 @@ _state_file = None
 # Output helpers
 # ---------------------------------------------------------------------------
 
+def _echo_terminal(frame: str) -> None:
+    """Print a terminal frame without failing on legacy Windows code pages."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        frame.encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        frame = frame.replace("\u2580", "#").replace("\u2584", "#")
+        frame = frame.encode(encoding, errors="replace").decode(encoding)
+    click.echo(frame, color=True)
+
 def _output(data: dict, ctx: click.Context) -> None:
     if ctx.obj.get("json"):
         click.echo(json.dumps(data, indent=2, default=str))
@@ -891,7 +901,7 @@ def terminal_render(ctx, scale, no_color, frame_id, onion):
         _output({"frame": frame, "width": _session.doc["width"],
                  "height": _session.doc["height"], "ansi": not no_color}, ctx)
     else:
-        click.echo(frame, color=True)
+        _echo_terminal(frame)
 
 
 @cli.command("preview")
@@ -1010,18 +1020,18 @@ def repl(ctx):
             doc = model.new_document(32, 32, name)
             _session.set_document(doc, None)
             skin.success(f"New project '{name}' 32x32")
-            click.echo(render_terminal(doc))
+            _echo_terminal(render_terminal(doc))
             continue
         if args[0] == "open" and len(args) > 1:
             from .utils.io import load_json
             doc = load_json(args[1])
             _session.set_document(doc, args[1])
             skin.success(f"Opened {args[1]}")
-            click.echo(render_terminal(doc))
+            _echo_terminal(render_terminal(doc))
             continue
         if args[0] == "terminal":
             _need_doc(ctx)
-            click.echo(render_terminal(_session.doc))
+            _echo_terminal(render_terminal(_session.doc))
             continue
         # Execute the line through the real Click CLI (session state is module-global)
         try:

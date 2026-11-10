@@ -25,7 +25,7 @@ AI 像人类一样分步绘制像素画，每一步都实时渲染到终端与 G
 - **实时终端帧**：ANSI 真彩半块字符渲染（含**洋葱皮**多帧幽灵）
 - **Undo/Redo** 跨进程持久化（sidecar 快照栈）
 - **并发安全**：多进程写同一项目文件使用唯一临时文件 + flock 原子替换
-- 49+ 单元 & E2E 测试（字节级验证 .aseprite 格式）
+- 75 个单元 & E2E 测试（字节级验证 .aseprite 格式）
 
 ### DSH 插件（实时监视器）
 - 20 个 `pixelart_*` 模型工具
@@ -64,6 +64,10 @@ cli-anything-aseprite --file hero.pxa export png hero.png --scale 8
 cli-anything-aseprite --file hero.pxa export aseprite hero.aseprite
 ```
 
+Windows 用户可直接运行以上命令。项目写入使用标准库锁实现，终端预览在
+GBK 代码页下会自动降级为 ASCII 半块字符；生成的 `.aseprite` 文件已按官方
+ASE 规范导出，可由 Aseprite 批处理打开并回导。
+
 ## 🗂 项目结构
 
 ```
@@ -76,10 +80,17 @@ cli-anything-aseprite --file hero.pxa export aseprite hero.aseprite
 └── README.md
 ```
 
+### Codex Skill
+
+The repository also includes `.agents/skills/pixel-art-studio`, which packages
+the drawing workflow for Codex. On Windows it uses `scripts/invoke_cli.ps1` to
+resolve the installed CLI and requires native `.aseprite` exports to pass a
+real Aseprite round-trip check when Aseprite is available.
+
 ## 🧪 测试
 
 ```bash
-cd agent-harness && python -m pytest cli_anything/aseprite/tests/ -q   # 73 passing
+cd agent-harness && python -m pytest cli_anything/aseprite/tests/ -q   # 75 passing
 ```
 
 ## 📄 许可
